@@ -1,4 +1,4 @@
-# Fixed VM IP
+# Fixed Virtual Machine Addresses
 
 In container environments, container IP addresses are typically dynamically assigned and may change after container restarts. However, VM users prefer their VM's IP address to be fixed for subsequent management and operations.
 
@@ -15,7 +15,7 @@ Therefore, the `masquerade` network mode of KubeVirt is often used. It forwards 
 - **Limited to Layer 3 Traffic Forwarding**: Some Layer 2 network functionalities cannot be achieved.
 - **Potential Traffic Interruptions**: `masquerade` traffic is tracked by conntrack, which may cause traffic interruptions during live migrations.
 
-Kube-OVN supports binding IP addresses to the VM lifecycle under KubeVirt's `bridge` and `managedTap` network modes. The IP address remains unchanged after operations such as VM restarts and live migrations. It also supports configuring fixed IP addresses for VMs by adding annotations.
+Kube-OVN supports binding IP addresses to the VM lifecycle under KubeVirt's `bridge` and `managedTap` network modes. The IP address remains unchanged after operations such as VM restarts and live migrations. It also supports configuring fixed IP addresses for VMs by adding annotations. For secondary network interfaces, Kube-OVN can achieve the same fixed address effect by working with Multus. For specific operations, please refer to [Multi-NIC Management](../advance/multi-nic.en.md).
 
 ## Binding IP and VM Lifecycle
 
@@ -25,14 +25,13 @@ Below is an example using the `bridge` network mode: creating a VM, performing r
 
 1. **Create VM**
 
-    ```bash
-    kubectl apply -f - <<EOF
+    ```yaml
     apiVersion: kubevirt.io/v1
     kind: VirtualMachine
     metadata:
       name: testvm
     spec:
-      runStrategy: Always 
+      runStrategy: Always
       template:
         metadata:
           labels:
@@ -66,7 +65,6 @@ Below is an example using the `bridge` network mode: creating a VM, performing r
             - name: cloudinitdisk
               cloudInitNoCloud:
                 userDataBase64: SGkuXG4=
-    EOF
     ```
 
 2. **View VM Status**
@@ -93,21 +91,21 @@ You can observe that in bridge mode, the VM's IP address remains unchanged after
 
 For scenarios where users need to specify the VM's IP address, they can add an annotation to the VM when creating it to assign a specific IP address. Other usage methods are consistent with native KubeVirt.
 
-```bash
-kubectl apply -f - <<EOF
+```yaml
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
   name: testvm
 spec:
-  runStrategy: Always 
+  runStrategy: Always
   template:
     metadata:
       labels:
         kubevirt.io/size: small
         kubevirt.io/domain: testvm
       annotations:
-        ovn.kubernetes.io/ip_address: 10.16.0.15
+        ovn.kubernetes.io/ip_address: 10.16.0.15 #(1)
+        ovn.kubernetes.io/mac_address: 00:00:00:53:6B:B6 #(2)
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
     spec:
       domain:
@@ -135,5 +133,65 @@ spec:
         - name: cloudinitdisk
           cloudInitNoCloud:
             userDataBase64: SGkuXG4=
-EOF
 ```
+
+1. :man_raising_hand: Specify IP address here, randomly assigned if not specified.
+2. :man_raising_hand: Specify MAC address here, randomly assigned if not specified.
+
+## Changing VM IP
+
+Kube-OVN currently does not support changing VM IP addresses online. The new IP address will only take effect after the VM is restarted.
+
+Follow these steps to change the VM IP:
+
+1. Modify the VM Annotation to change to the desired IP address.
+2. Run `virtctl restart <vm name>` to restart the VM and make the new IP address effective.
+
+## Specify Subnet
+
+If you don't need to specify an IP when creating a VM, but only need to specify the Subnet where the VM network resides, you can use `ovn.kubernetes.io/logical_switch`:
+
+```yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: testvm
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/size: small
+        kubevirt.io/domain: testvm
+      annotations:
+        ovn.kubernetes.io/logical_switch: subnet1 #(1)
+        kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: containerdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+          - name: default
+            bridge: {}
+        resources:
+          requests:
+            memory: 64M
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: quay.io/kubevirt/cirros-container-disk-demo
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userDataBase64: SGkuXG4=
+```
+
+1. :man_raising_hand: Specify the Subnet where the VM resides here.

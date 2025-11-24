@@ -1,5 +1,15 @@
 # VPC Egress Gateway
 
+!!! note
+
+    Subnets under custom VPCs do not support distributed gateways and centralized gateways under default VPCs.
+
+    Currently, custom VPCs support three solutions for external network connectivity: VPC NAT Gateway, OVN Gateway, and Egress Gateway. Among them, VPC NAT Gateway is the earliest supported egress method by Kube-OVN, creating a multi-NIC Pod for each VPC NAT Gateway, with one NIC connected to the custom VPC network and another NIC connected to the underlying physical network through Macvlan, implementing various ingress/egress operations through iptables within the Pod. This method currently supports the most features and has been used for the longest time, but it also has the disadvantages of single point of failure and complex usage.
+
+    OVN Gateway uses various NAT capabilities natively supported within OVN to implement ingress/egress, which can improve performance through hardware acceleration and achieve failover through OVN's built-in BFD. Since it exposes OVN's native concepts, users need to be fairly familiar with OVN's application.
+
+    Egress Gateway is an improvement to address the single point issue of VPC NAT Gateway, implementing horizontal scaling and fast failover, but currently only implements egress capability without ingress capability.
+
 **VPC Egress Gateway** is used to control external network access for Pods within a VPC (including the default VPC) with a group of static addresses and has the following features:
 
 - Achieves Active-Active high availability through ECMP, enabling horizontal throughput scaling
@@ -224,6 +234,32 @@ Routing Policies
      29000        ip4.src == $ovn.default.kube.ovn.worker_ip4         reroute                100.64.0.3
 ```
 
+### Specifying Egress Gateway IP and Deployment Nodes
+
+You can use the `externalIPs` and `nodeSelector` fields to specify the Egress IPs used by Egress Gateway Pods and the nodes they are deployed on:
+
+```yaml
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: gateway1
+  namespace: default
+spec:
+  vpc: ovn-cluster
+  replicas: 2
+  externalSubnet: macvlan1
+  policies:
+    - snat: true
+      subnets:
+        - ovn-default
+  externalIPs:
+    - 172.17.0.10
+    - 172.17.0.11
+  nodeSelector:
+    - matchLabels:
+        kubernetes.io/hostname: kube-ovn-worker
+```
+
 ### Enabling BFD-based High Availability
 
 BFD-based high availability relies on the VPC BFD LRP function, so you need to modify the VPC resource to enable BFD Port. Here is an example:
@@ -362,7 +398,7 @@ Spec:
 | `externalSubnet` | `string` | No | - | Name of the subnet used to access the external network. | `ext1` |
 | `internalIPs` | `string array` | Yes | - | IP addresses used for accessing the VPC network. IPv4, IPv6 and dual-stack are supported. The number of IPs specified must NOT be less than `replicas`. It is recommended to set the number to `<replicas> + 1` to avoid extreme cases where the Pod is not created properly. | `10.16.0.101` / `fd00::11` / `10.16.0.101,fd00::11` |
 | `externalIPs` | `string array` | Yes | - | IP addresses used for accessing the external network. IPv4, IPv6 and dual-stack are supported. The number of IPs specified must NOT be less than `replicas`. It is recommended to set the number to `<replicas> + 1` to avoid extreme cases where the Pod is not created properly. | `10.16.0.101` / `fd00::11` / `10.16.0.101,fd00::11` |
-| `bfd` | `object` | Yes | - | BFD Configuration.| - |
+| `bfd` | `object` | Yes | - | BFD Configuration. | - |
 | `policies` | `object array` | Yes | - | Egress policies. Configurable when `selectors` is configured. | - |
 | `selectors` | `object array` | Yes | - | Configure Egress policies by namespace selectors and Pod selectors. SNAT/MASQUERADE will be applied to the matched Pods. Configurable when `policies` is configured. | - |
 | `nodeSelector` | `object array` | Yes | - | Node selector applied to the workload. The workload (Deployment/Pod) will run on the selected nodes. | - |
@@ -373,8 +409,8 @@ BFD Configuration:
 | Fields | Type | Optional | Default Value | Description | Example |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `enabled` | `boolean` | Yes | `false` | Whether to enable BFD. | `true` |
-| `minRX` | `integer/int32` | Yes | `1000` |  BFD minRX in milliseconds. | `500` |
-| `minTX` | `integer/int32` | Yes | `1000` | BFD minTX in milliseconds.  | `500` |
+| `minRX` | `integer/int32` | Yes | `1000` | BFD minRX in milliseconds. | `500` |
+| `minTX` | `integer/int32` | Yes | `1000` | BFD minTX in milliseconds. | `500` |
 | `multiplier` | `integer/int32` | Yes | `3` | BFD multiplier. | `1` |
 
 Egress Policies:

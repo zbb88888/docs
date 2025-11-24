@@ -1,7 +1,7 @@
 # VPC 使用
 
 Kube-OVN 支持多租户隔离级别的 VPC 网络。不同 VPC 网络相互独立，可以分别配置 Subnet 网段，
-路由策略，安全策略，出网网关，EIP 等配置。
+路由策略，安全策略、出网网关，EIP 等配置。
 
 > VPC 主要用于有多租户网络强隔离的场景，部分 Kubernetes 网络功能在多租户网络下存在冲突。
 > 例如节点和 Pod 互访，NodePort 功能，基于网络访问的健康检查和 DNS 能力在多租户网络场景暂不支持。
@@ -93,34 +93,22 @@ spec:
 
 运行成功后可观察两个 Pod 地址属于同一个 CIDR，但由于运行在不同的租户 VPC，两个 Pod 无法相互访问。
 
-### 自定义 VPC Pod 支持 livenessProbe 和 readinessProbe
-
-由于常规配置下自定义 VPC 下的 Pod 和节点的网络之间并不互通，所以 kubelet 发送的探测报文无法到达自定 VPC 内的 Pod。Kube-OVN 通过 TProxy 将 kubelet 发送的探测报文重定向到自定义 VPC 内的 Pod，从而实现这一功能。
-
-配置方法如下，在 DaemonSet `kube-ovn-cni` 中增加参数 `--enable-tproxy=true`：
-
-```yaml
-spec:
-  template:
-    spec:
-      containers:
-      - args:
-        - --enable-tproxy=true
-```
-
-该功能限制条件：
-
-1. 当同一个节点下出现不同 VPC 下的 Pod 具有相同的 IP，探测功能失效。
-2. 目前暂时只支持 `tcpSocket` 和 `httpGet` 两种探测方式。
-
 ## 创建 VPC 网关
-
-> 自定义 VPC 下的子网不支持默认 VPC 下的分布式网关和集中式网关。
 
 VPC 内容器访问外部网络需要通过 VPC 网关，VPC 网关可以打通物理网络和租户网络，并提供
 浮动 IP，SNAT 和 DNAT 功能。
 
 VPC 网关功能依赖 Multus-CNI 的多网卡功能，安装请参考 [multus-cni](https://github.com/k8snetworkplumbingwg/multus-cni/blob/master/docs/quickstart.md){: target = "_blank" }。
+
+!!! note
+
+    自定义 VPC 下的子网不支持默认 VPC 下的分布式网关和集中式网关。
+
+    目前自定义 VPC 支持三种和外网互通的方案：VPC NAT 网关，OVN 网关和 Egress Gateway。其中 VPC NAT 网关为 Kube-OVN 最早支持的出网方式，为每个 VPC NAT 网关创建一个多网卡 Pod，一个网卡接入自定义 VPC 网络，另一个网卡通过 Macvlan 接入底层物理网络，通过 Pod 内的 iptables 实现各类出网和入网操作。该方式目前支持最多的功能，被使用的时间也最长，但也存在单点故障和使用复杂的缺点。
+
+    OVN 网关使用了 OVN 内部原生支持的各类 NAT 能力实现出网和入网，可通过硬件加速提升性能，通过 OVN 内置的 BFD 实现故障切换，由于暴露的是 OVN 原生的概念，需要用户对 OVN 的使用较为熟悉。
+
+    Egress Gateway 是针对 VPC NAT 网关的单点问题的改进，实现了水平扩展和故障快速切换，但是目前只实现了出网能力，没有入网能力。
 
 ### 配置外部网络
 
@@ -214,6 +202,7 @@ spec:
     - "kubernetes.io/os: linux"
   externalSubnets:
     - ovn-vpc-external-network
+  noDefaultEIP: false
 ```
 
 - `vpc`：该 VpcNatGateway 所属的 VPC。
@@ -221,11 +210,12 @@ spec:
 - `lanIp`：`subnet` 内某个未被使用的 IP，VPC 网关 Pod 最终会使用该 IP。当 VPC 配置路由需要指向当前 VpcNatGateway 时 `nextHopIP` 需要设置为这个 `lanIp`。
 - `selector`：VpcNatGateway Pod 的节点选择器，格式和 Kubernetes 中的 NodeSelector 格式相同。
 - `externalSubnets`：VPC 网关使用的外部网络，如果不配置则默认使用 `ovn-vpc-external-network`，当前版本只支持配置一个外部网络。
+- `noDefaultEIP`：VPC 网关的附属网卡是否绑定默认 EIP，默认为 `false` 兼容 v1.15 前行为模式，在非 BGP 网关模式下推荐设置为 `true` 来节省 Underlay 地址。
 
 其他可配参数：
 
-- `tolerations` : 为 VPC 网关配置容忍度，具体配置参考 [污点和容忍度](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/taint-and-toleration/)。
-- `affinity` :  为 VPC 网关 Pod 或节点配置亲和性，具体设置参考 [亲和性与反亲和性](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity)。
+- `tolerations`：为 VPC 网关配置容忍度，具体配置参考 [污点和容忍度](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/taint-and-toleration/)。
+- `affinity`：为 VPC 网关 Pod 或节点配置亲和性，具体设置参考 [亲和性与反亲和性](https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity)。
 
 在使用 VPC-NAT-GW 时需要注意：
 
@@ -401,7 +391,7 @@ Service 的 IP 地址是全局分配且不能重复。对于 VPC 的使用场景
 
 针对这类场景，Kube-OVN 提供了 `SwitchLBRule` 资源，用户可以自定义内部负载均衡的地址范围。
 
-一个 `SwitchLBRule`` 例子如下：
+一个 `SwitchLBRule` 例子如下：
 
 ```yaml
 apiVersion: kubeovn.io/v1
@@ -413,7 +403,7 @@ spec:
   sessionAffinity: ClientIP
   namespace: default
   selector:
-    - app:nginx
+    - app: nginx
   ports:
   - name: dns
     port: 8888
@@ -438,7 +428,7 @@ vpc-dns-test-cjh2   10.96.0.3   53/UDP,53/TCP,9153/TCP   kube-system/slr-vpc-dns
 ## 自定义 vpc-dns
 
 由于自定义 VPC 和默认 VPC 网络相互隔离，VPC 内 Pod 无法使用默认的 coredns 服务进行域名解析。
-如果希望在自定义 VPC 内使用 coredns 解析集群内 Service 域名，可以通过 Kube-OVN 提供的 vpc-dns 资源来实现。
+如果希望在自定义 VPC 内使用 CoreDNS 解析集群内 Service 域名，可以通过 Kube-OVN 提供的 vpc-dns 资源来实现。
 
 ### 创建附加网卡
 
@@ -603,7 +593,7 @@ spec:
 ```
 
 - `vpc`：用于部署 dns 组件的 vpc 名称。
-- `subnet`：用于部署 dns 组件的子名称。
+- `subnet`：用于部署 dns 组件的子网名称。
 
 查看资源信息：
 
@@ -618,8 +608,8 @@ test-cjh2   true     cjh-vpc-1   cjh-subnet-2
 
 ### 限制
 
-- 一个 vpc 下只会部署一个自定义 dns 组件;
-- 当一个 vpc 下配置多个 vpc-dns 资源（即同一个 vpc 不同的 subnet），只有一个 vpc-dns 资源状态 `true`，其他为 `fasle`;
+- 一个 VPC 下只会部署一个自定义 DNS 组件；
+- 当一个 VPC 下配置多个 vpc-dns 资源（即同一个 VPC 不同的 subnet），只有一个 vpc-dns 资源状态为 `true`，其他为 `false`；
 - 当 `true` 的 vpc-dns 被删除掉，会获取其他 `false` 的 vpc-dns 进行部署。
 
 ## 默认子网
@@ -640,3 +630,23 @@ spec:
 - `defaultSubnet`：VPC 下默认子网的名称。
 
 默认子网会给所有未指定子网的 Namespace 增加 `ovn.kubernetes.io/logical_switch` 注解，所有没有显式使用 `ovn.kubernetes.io/logical_switch` 注解的 Pod 都会自动从默认子网分配地址。
+
+### 自定义 VPC Pod 支持 livenessProbe 和 readinessProbe
+
+由于常规配置下自定义 VPC 下的 Pod 和节点的网络之间并不互通，所以 kubelet 发送的探测报文无法到达自定 VPC 内的 Pod。Kube-OVN 通过 TProxy 将 kubelet 发送的探测报文重定向到自定义 VPC 内的 Pod，从而实现这一功能。
+
+配置方法如下，在 DaemonSet `kube-ovn-cni` 中增加参数 `--enable-tproxy=true`：
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+      - args:
+        - --enable-tproxy=true
+```
+
+该功能限制条件：
+
+1. 当同一个节点下出现不同 VPC 下的 Pod 具有相同的 IP，探测功能失效。
+2. 目前暂时只支持 `tcpSocket` 和 `httpGet` 两种探测方式。

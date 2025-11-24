@@ -20,7 +20,7 @@ and this document will describe the common configurations and differentiated fea
 To make it easier for users to get started quickly,
 Kube-OVN has a built-in default Subnet, all Namespaces that do not explicitly declare subnet affiliation are automatically assigned IPs
 from the default subnet and the network information.
-The configuration of this Subnet is specified at installation time, you can refer to [Built-in Network Settings](setup-options.en.md#built-in-network-settings) for more details.
+The configuration of this Subnet is specified at installation time, you can refer to [Built-in Network Settings](../reference/setup-options.en.md#built-in-network-settings) for more details.
 To change the CIDR of the default Subnet after installation please refer to [Change Subnet CIDR](../ops/change-default-subnet.en.md).
 
 In Overlay mode, the default Subnet uses a distributed gateway and NAT translation for outbound traffic,
@@ -64,7 +64,7 @@ at each node that connect to the `join` subnet, through which the nodes and Pods
 
 All network communication between Pods and Nodes will go through the `ovn0` network interface. When a Node accesses a Pod, it enters the virtual network via the `ovn0` interface, and the virtual network then connects to the host network through the `ovn0` interface.
 
-The configuration of this Subnet is specified at installation time, you can refer to [Built-in Network Settings](setup-options.en.md#built-in-network-settings) for more details.
+The configuration of this Subnet is specified at installation time, you can refer to [Built-in Network Settings](../reference/setup-options.en.md#built-in-network-settings) for more details.
 To change the CIDR of the Join Subnet after installation please refer to [Change Join CIDR](../ops/change-join-subnet.en.md).
 
 ### Check the Join Subnet
@@ -142,7 +142,7 @@ EOF
 - `excludeIps`: The address list is reserved so that the container network will not automatically assign addresses in the list, which can be used as a fixed IP address assignment segment or to avoid conflicts with existing devices in the physical network in Underlay mode.
 - `gateway`: For this subnet gateway address, Kube-OVN will automatically assign the corresponding logical gateway in Overlay mode, and the address should be the underlying physical gateway address in Underlay mode.
 - `namespaces`: Bind the list of Namespace for this Subnet. Pods under the Namespace will be assigned addresses from the current Subnet after binding.
-- `routeTable`: Associate the route table, default is main table, route table definition please defer to [Static Routes](../vpc/vpc.en.md#static-routes)
+- `routeTable`: Optional, associate the route table, default is main table. For route table definition please defer to [Static Routes](../vpc/vpc.en.md#static-routes).
 
 ### Create Pod in the Subnet
 
@@ -179,7 +179,7 @@ If you need to bind a subnet to a Workload type resource such as Deployment or S
 
 ## Overlay Subnet Gateway Settings
 
-> This feature only works for Overlay mode Subnets, Underlay type Subnets need to use the underlying physical gateway to access the external network.
+> This feature applies only to Overlay subnets in the default VPC. It is not effective for Underlay subnets or subnets in custom VPCs.
 
 Pods under the Overlay Subnet need to access the external network through a gateway,
 and Kube-OVN currently supports two types of gateways:
@@ -250,10 +250,20 @@ spec:
 - If a centralized gateway wants to specify a specific NIC of a machine for outbound networking,
 `gatewayNode` format can be changed to `kube-ovn-worker:172.18.0.2, kube-ovn-control-plane:172.18.0.3`.
 - The centralized gateway defaults to primary-backup mode, with only the primary node performing traffic forwarding.
-  If you need to switch to ECMP mode, please refer to [ECMP Settings](setup-options.en.md#centralized-gateway-ecmp-settings).
+  If you need to switch to ECMP mode, please refer to [ECMP Settings](../reference/setup-options.en.md#centralized-gateway-ecmp-settings).
 - The spec field `enableEcmp` has been added to the subnet crd definition since Kube-OVN v1.12.0 to migrate the ECMP switch to the subnet level. You can set whether to enable ECMP mode based on different subnets. The `enable-ecmp` parameter in the `kube-ovn-controller` deployment is no longer used. After the previous version is upgraded to v1.12.0, the subnet switch will automatically inherit the value of the original global switch parameter.
 
+!!! note "Failover Time"
+
+    In centralized gateway ECMP mode, kube-ovn-controller actively probes node status through ping, detecting failures within 5s and completing failover within 5s-10s, during which some traffic may fail.
+    
+    In centralized gateway primary-backup mode, failover is based on Node Ready status, and it may take several minutes to complete failover in case of power outage.
+
 ## Subnet ACL
+
+!!! warning
+
+    Kube-OVN supports four types of access control mechanisms: [NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/), [Network Policy API](https://network-policy-api.sigs.k8s.io/), Subnet ACL, and [Security Group](../vpc/security-group.en.md). All of these are implemented using OVN ACLs at the underlying level. Among them, NetworkPolicy and Network Policy API are designed with rule layering in mind, ensuring no priority conflicts. However, mixing other types of access control methods may lead to priority conflicts. It is recommended to avoid using multiple access control mechanisms simultaneously to prevent rule confusion caused by priority conflicts.
 
 For scenarios with fine-grained ACL control, Subnet of Kube-OVN provides ACL to enable fine-grained rules.
 
@@ -282,7 +292,7 @@ spec:
   cidrBlock: 10.10.0.0/24
 ```
 
-In some scenarios, users hope that the internal traffic of the subnet configured with ACL rules will not be affected, which can be achieved by configuring `allowEWTraffic: true`.
+In some scenarios, users want the internal traffic of the subnet configured with ACL rules to remain unaffected, which can be achieved by configuring `allowEWTraffic: true`.
 
 ## Subnet Isolation
 

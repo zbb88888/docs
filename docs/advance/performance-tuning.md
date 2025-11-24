@@ -3,9 +3,18 @@
 为了保持安装的简单和功能的完备，Kube-OVN 的默认安装脚本并没有对性能针对性的优化。如果应用对延迟和吞吐量敏感，
 管理员可以通过本文档对性能进行针对性优化。
 
-社区会不断迭代控制面板和优化面的性能，部分通用性能优化已经集成到最新版本，建议使用最新版本获得更好的默认性能。
+社区会不断迭代控制平面和数据平面的性能，部分通用性能优化已经集成到最新版本，建议使用最新版本获得更好的默认性能。
 
-更多关于性能优化的过程和方法论，可以观看视频分享：[Kube-OVN 容器性能优化之旅](https://www.bilibili.com/video/BV1zS4y1T73m?share_source=copy_web)。
+更多关于性能优化的过程和方法论，可以观看视频分享：[Kube-OVN 容器性能优化之旅](https://www.bilibili.com/video/BV1zS4y1T73m?share_source=copy_web){: target="_blank" }。
+
+## 网络性能的常见误解
+
+性能调优和对比是令人兴奋的话题，不同配置下的性能数据对比也会让人着迷，但是这一切在实际应用场景下产生的效果可能微乎其微，下面列出一些常见的网络性能的误区，帮你更好的判断是否需要进行网络调优。
+
+1. CNI 带来的延迟大约为每个数据包数十纳秒，如果你的应用本身请求处理在数十毫秒，即使 CNI 完全没有延迟，对应用的延迟性能影响也不大。
+2. 常见的网络性能测试为发包测试，此时如果一个网络插件需要 10ns 处理每个数据包，而另一个需要 20ns，性能会有一倍的差距，但是对于真实数十毫秒的应用来说差距并不明显。
+3. 与第一印象相反，影响网络性能的瓶颈通常在 CPU，更好、更多的 CPU 带来的性能提升幅度会更明显。
+4. 如果需要极限的网络性能，最好使用 Macvlan 或 SR-IOV 这类采用超轻量或硬件虚拟化技术的网络方案。
 
 ## 基准测试
 
@@ -67,7 +76,7 @@
 | Kube-OVN Underlay  | 32.6         | 44           | 15.1          | 6.71         |
 | HOST Network       | 35.9         | 45.9         | 14.6          | 5.59         |
 
-> 在部分情况下容器网络的性能会优于宿主机网络，这是优于经过优化后容器网络路径完全绕过了 netfilter，
+> 在部分情况下容器网络的性能会优于宿主机网络，这是由于经过优化后容器网络路径完全绕过了 netfilter，
 > 而宿主机网络由于 `kube-proxy` 的存在所有数据包均需经过 netfilter，会导致在一些环境下容器网络
 > 的消耗相对更小，因此会有更好的性能表现。
 
@@ -113,7 +122,7 @@ ethtool -G eno1 tx 4096
 
 ### 使用 tuned 优化系统参数
 
-[tuned](https://tuned-project.org/) 可以使用一系列预置的 profile 文件保存了针对特定场景的一系列系统优化配置。
+[tuned](https://tuned-project.org/){: target="_blank" } 可以使用一系列预置的 profile 文件保存了针对特定场景的一系列系统优化配置。
 
 针对延迟优先场景：
 
@@ -147,6 +156,14 @@ args:
 
 > Underlay 模式下 `kube-proxy` 无法使用 iptables 或 ipvs 控制容器网络流量，如需关闭 LB 功能需要确认是否不需要 Service 功能。
 
+### 特定目标地址跳过 conntrack 处理
+
+在部分场景下如果必须使用 OVN LB 来实现 Service 转发功能，但是提前知道访问特定目标地址不需要经过 Service 和 NetworkPolicy 处理，例如 Subnet A 内的 Pod 直接访问 Subnet B 的地址，中间无需网络策略也不依赖 Service。则可以通过配置 kube-ovn-controller 的 `--skip-conntrack-dst-cidrs` 参数跳过特定网段的 conntrack 处理，实现加速：
+
+```yaml
+    --skip-conntrack-dst-cidrs="10.17.0.0/16,169.254.169.245/32"
+```
+
 ### 内核 FastPath 模块
 
 由于容器网络和宿主机网络在不同的 network ns，数据包在跨宿主机传输时会多次经过 netfilter 模块，会带来近 20% 的 CPU 开销。由于大部分情况下
@@ -154,10 +171,9 @@ args:
 
 > 如容器网络内需要使用 netfilter 提供的功能如 iptables，ipvs，nftables 等，该模块会使相关功能失效。
 
-由于内核模块和内核版本相关，无法提供一个单一适应所有内核的内核模块制品。我们预先编译了部分内核的 `FastPath` 模块，
-可以前往 [tunning-package](https://github.com/kubeovn/tunning-package) 进行下载。
+由于内核模块和内核版本相关，无法提供一个单一适应所有内核的内核模块制品。
 
-也可以手动进行编译，方法参考[手动编译 FastPath 模块](./fastpath.md)
+用户需要手动进行编译，方法参考[手动编译 FastPath 模块](./fastpath.md)
 
 获得内核模块后可在每个节点使用 `insmod kube_ovn_fastpath.ko` 加载 `FastPath` 模块，并使用 `dmesg` 验证模块加载成功：
 
@@ -176,8 +192,7 @@ args:
 OVS 的 flow 处理包括哈希计算，匹配等操作会消耗大约 10% 左右的 CPU 资源。现代 x86 CPU 上的一些指令集例如 `popcnt` 和 `sse4.2` 可以
 加速相关计算过程，但内核默认编译未开启相关选项。经测试在开启相应指令集优化后，flow 相关操作 CPU 消耗将会降至 5% 左右。
 
-和 `FastPath` 模块的编译类似，由于内核模块和内核版本相关，无法提供一个单一适应所有内核的内核模块制品。用户需要手动编译或者
-前往 [tunning-package](https://github.com/kubeovn/tunning-package) 查看是否有已编译好的制品进行下载。
+和 `FastPath` 模块的编译类似，由于内核模块和内核版本相关，无法提供一个单一适应所有内核的内核模块制品，用户需要手动编译。
 
 使用该内核模块前请先确认 CPU 是否支持相关指令集：
 
@@ -197,7 +212,7 @@ yum install -y gcc kernel-devel-$(uname -r) python3 autoconf automake libtool rp
 编译 OVS 内核模块并生成对应 RPM 文件:
 
 ```bash
-git clone -b branch-2.17 --depth=1 https://github.com/openvswitch/ovs.git
+git clone -b branch-3.5 --depth=1 https://github.com/openvswitch/ovs.git
 cd ovs
 curl -s  https://github.com/kubeovn/ovs/commit/2d2c83c26d4217446918f39d5cd5838e9ac27b32.patch |  git apply
 ./boot.sh
@@ -209,7 +224,7 @@ cd rpm/rpmbuild/RPMS/x86_64/
 复制 RPM 到每个节点并进行安装：
 
 ```bash
-rpm -i openvswitch-kmod-2.15.2-1.el7.x86_64.rpm
+rpm -i openvswitch-kmod-3.5.1-1.el7.x86_64.rpm
 ```
 
 若之前已经启动过 Kube-OVN，旧版本 OVS 模块已加载至内核，建议重启机器重新加载新版内核模块。
@@ -227,7 +242,7 @@ apt install -y autoconf automake libtool gcc build-essential libssl-dev
 ```bash
 apt install -y autoconf automake libtool gcc build-essential libssl-dev
 
-git clone -b branch-2.17 --depth=1 https://github.com/openvswitch/ovs.git
+git clone -b branch-3.5 --depth=1 https://github.com/openvswitch/ovs.git
 cd ovs
 curl -s  https://github.com/kubeovn/ovs/commit/2d2c83c26d4217446918f39d5cd5838e9ac27b32.patch |  git apply
 ./boot.sh
@@ -249,6 +264,10 @@ cp debian/openvswitch-switch.init /etc/init.d/openvswitch-switch
 若之前已经启动过 Kube-OVN，旧版本 OVS 模块已加载至内核，建议重启机器重新加载新版内核模块。
 
 ### 使用 STT 类型隧道
+
+!!! warning
+
+    OpenVswitch 上游在 3.6 版本[移除对 STT 类型 Tunnel 的支持](https://github.com/openvswitch/ovs/commit/19b89416203f3b3b212fb01c30c81ea1b77624eb){: target="_blank" }，该方案未来将无法得到上游支持。
 
 常见的隧道封装协议例如 Geneve 和 Vxlan 使用 UDP 协议对数据包进行封装，在内核中有良好的支持。但是当使用 UDP 封装 TCP 数据包时，
 现代操作系统和网卡针对 TCP 协议的优化和 offload 功能将无法顺利工作，导致 TCP 的吞吐量出现显著下降。在虚拟化场景下由于 CPU 的限制，

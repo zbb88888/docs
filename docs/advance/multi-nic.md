@@ -33,6 +33,19 @@ net1 网络的网络定义来自于 multus-cni 中的 NetworkAttachmentDefinitio
 
 在容器所在机器的 CNI 可以通过在配置中配置 `kube-ovn-cni` 作为 ipam 插件, `kube-ovn-cni` 将会读取 Pod annotation 并将地址信息通过 CNI 协议的标准格式返回给相应的 CNI 插件。
 
+## 兼容性问题
+
+`NetworkAttachmentDefinition` 支持 `spec` 为空，multus 会自动在 `defaultConfDir` 搜索同名的 CNI 配置文件，如下所示：
+
+```yaml
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-conf-2
+```
+
+但是 `kube-ovn-controller` 需要集中获取每个 `NetworkAttachmentDefinition` 里的 `provider` 信息，无法去每个节点获取对应相关配置。因此 `spec` 为空的用法和 Kube-OVN 的 IPAM 能力存在兼容性问题。
+
 ## 使用方法
 
 ### 安装 Kube-OVN 和 Multus
@@ -253,7 +266,7 @@ spec:
 - `k8s.v1.cni.cncf.io/networks`: 取值为对应的 NetworkAttachmentDefinition 的 `<namespace>/<name>`
 - `macvlan.default.kubernetes.io/logical_switch`: 取值为子网名
 
-> 注意: 通过`<networkAttachmentName>.<networkAttachmentNamespace>.kubernetes.io/logical_switch` 指定子网的优先级高于通过 provider 指定子网，基于 ovn 类型的 subnet 提供 ipam 同样支持创建固定 IP 的 Pod、创建使用固定 IP 的工作负载、创建默认路由为 macvlan 的 Pod，但不支持创建主网卡为 macvlan 的 Pod。
+> 注意：通过`<networkAttachmentName>.<networkAttachmentNamespace>.kubernetes.io/logical_switch` 指定子网的优先级高于通过 provider 指定子网，基于 ovn 类型的 subnet 提供 ipam 同样支持创建固定 IP 的 Pod、创建使用固定 IP 的工作负载、创建默认路由为 macvlan 的 Pod，但不支持创建主网卡为 macvlan 的 Pod。
 
 ### 附属网卡为 Kube-OVN 类型网卡
 

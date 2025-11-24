@@ -3,7 +3,7 @@
 Kube-OVN supports multi-tenant isolation level VPC networks. Different VPC networks are independent of each other
 and can be configured separately with Subnet CIDRs, routing policies, security policies, outbound gateways, EIP, etc.
 
-> VPC is mainly used in scenarios where there requires strong isolation of multi-tenant networks
+> VPC is mainly used in scenarios where strong isolation is required for multi-tenant networks
 > and some Kubernetes networking features conflict under multi-tenant networks.
 > For example, node and pod access, NodePort functionality, network access-based health checks,
 > and DNS capabilities are not supported in multi-tenant network scenarios at this time.
@@ -97,33 +97,21 @@ spec:
 After running successfully, you can observe that the two Pod addresses belong to the same CIDR,
 but the two Pods cannot access each other because they are running on different tenant VPCs.
 
-### Custom VPC Pod supports livenessProbe and readinessProbe
-
-Since the Pods under the custom VPC do not communicate with the network of the node, the probe packets sent by the kubelet cannot reach the Pods in the custom VPC. Kube-OVN uses TProxy to redirect the detection packets sent by kubelet to Pods in the custom VPC to achieve this function.
-
-The configuration method is as follows, add the parameter `--enable-tproxy=true` in DaemonSet `kube-ovn-cni`:
-
-```yaml
-spec:
-  template:
-    spec:
-      containers:
-      - args:
-        - --enable-tproxy=true
-```
-
-Restrictions for this feature:
-
-1. When Pods under different VPCs have the same IP under the same node, the detection function fails.
-2. Currently, only `tcpSocket` and `httpGet` are supported.
-
 ## Create VPC NAT Gateway
-
-> Subnets under custom VPCs do not support distributed gateways and centralized gateways under default VPCs.
 
 Pod access to the external network within the VPC requires a VPC gateway, which bridges the physical and tenant networks and provides floating IP, SNAT and DNAT capabilities.
 
 The VPC gateway function relies on Multus-CNI function, please refer to [multus-cni](https://github.com/k8snetworkplumbingwg/multus-cni/blob/master/docs/quickstart.md){: target = "_blank" }.
+
+!!! note
+
+    Subnets under custom VPCs do not support distributed gateways and centralized gateways under default VPCs.
+
+    Currently, custom VPCs support three solutions for external network connectivity: VPC NAT Gateway, OVN Gateway, and Egress Gateway. Among them, VPC NAT Gateway is the earliest supported egress method by Kube-OVN, creating a multi-NIC Pod for each VPC NAT Gateway, with one NIC connected to the custom VPC network and another NIC connected to the underlying physical network through Macvlan, implementing various ingress/egress operations through iptables within the Pod. This method currently supports the most features and has been used for the longest time, but it also has the disadvantages of single point of failure and complex usage.
+
+    OVN Gateway uses various NAT capabilities natively supported within OVN to implement ingress/egress, which can improve performance through hardware acceleration and achieve failover through OVN's built-in BFD. Since it exposes OVN's native concepts, users need to be fairly familiar with OVN's application.
+
+    Egress Gateway is an improvement to address the single point issue of VPC NAT Gateway, implementing horizontal scaling and fast failover, but currently only implements egress capability without ingress capability.
 
 ### Configuring the External Network
 
@@ -218,6 +206,7 @@ spec:
     - "kubernetes.io/os: linux"
   externalSubnets:
     - ovn-vpc-external-network
+  noDefaultEIP: false
 ```
 
 - `vpc`: The VPC to which this VpcNatGateway belongs.
@@ -225,6 +214,7 @@ spec:
 - `lanIp`: An unused IP within the `subnet` that the VPC Gateway Pod will eventually use. When configuring routing for a VPC, the  `nextHopIP` needs to be set to the `lanIp` of the current VpcNatGateway.
 - `selector`: The node selector for VpcNatGateway Pod has the same format as NodeSelector in Kubernetes.
 - `externalSubnets`: External network used by the VPC gateway, if not configured, `ovn-vpc-external-network` is used by default, and only one external network is supported in the current version.
+- `noDefaultEIP`: Whether the VPC gateway's secondary network interface binds a default EIP. Defaults to `false` to maintain compatibility with pre-v1.15 behavior patterns. In non-BGP gateway modes, it's recommended to set this to `true` to reduce Underlay address allocation.
 
 Other configurable parameters:
 
@@ -398,6 +388,46 @@ spec:
       priority: 10
 ```
 
+## Custom Internal Load Balancing Rules
+
+Kubernetes' built-in Service capability can fulfill internal load balancing functions, but due to Kubernetes implementation limitations, Service IP addresses are globally allocated and cannot be duplicated. For VPC usage scenarios, users want to customize the address range of internal load balancing, and load balancing addresses under different VPCs may overlap. Kubernetes' built-in Service functionality cannot fully satisfy this requirement.
+
+For such scenarios, Kube-OVN provides the `SwitchLBRule` resource, allowing users to customize the address range of internal load balancing.
+
+An example of `SwitchLBRule`:
+
+```yaml
+apiVersion: kubeovn.io/v1
+kind: SwitchLBRule
+metadata:
+  name:  cjh-slr-nginx
+spec:
+  vip: 1.1.1.1
+  sessionAffinity: ClientIP
+  namespace: default
+  selector:
+    - app: nginx
+  ports:
+  - name: dns
+    port: 8888
+    targetPort: 80
+    protocol: TCP
+```
+
+- `vip`: Custom internal load balancing address.
+- `namespace`: Namespace where the load balancer backend Pods are located.
+- `sessionAffinity`: Same functionality as Service's `sessionAffinity`.
+- `selector`: Same functionality as Service's `selector`.
+- `ports`: Same functionality as Service's `port`.
+
+View deployed internal load balancer rules:
+
+```bash
+# kubectl get slr
+NAME                VIP         PORT(S)                  SERVICE                             AGE
+vpc-dns-test-cjh2   10.96.0.3   53/UDP,53/TCP,9153/TCP   kube-system/slr-vpc-dns-test-cjh2   88m
+```
+
 ## Custom vpc-dns
 
 Due to the isolation between custom VPCs and default VPC networks, Pods in VPCs cannot use the default coredns service for domain name resolution. If you want to use coredns to resolve Service domain names within the custom VPC, you can use the `vpc-dns` resource provided by Kube-OVN.
@@ -421,7 +451,7 @@ spec:
 
 ### Modify the Provider of the ovn-default Logical Switch
 
-Modify the provider of ovn-default to the provider `ovn-nad.default.ovn`configured above in nad:
+Modify the provider of ovn-default to the provider `ovn-nad.default.ovn` configured above in nad:
 
 ```yaml
 apiVersion: kubeovn.io/v1
@@ -603,3 +633,23 @@ spec:
 
 Please note that it will annotate the VPC namespaces with just one logical switch using `"ovn.kubernetes.io/logical_switch"` annotation.
 Any of the new Pods without `"ovn.kubernetes.io/logical_switch"` annotation will be added to the default Subnet.
+
+### Custom VPC Pod supports livenessProbe and readinessProbe
+
+Since the Pods under the custom VPC do not communicate with the network of the node, the probe packets sent by the kubelet cannot reach the Pods in the custom VPC. Kube-OVN uses TProxy to redirect the detection packets sent by kubelet to Pods in the custom VPC to achieve this function.
+
+The configuration method is as follows, add the parameter `--enable-tproxy=true` in DaemonSet `kube-ovn-cni`:
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+      - args:
+        - --enable-tproxy=true
+```
+
+Restrictions for this feature:
+
+1. When Pods under different VPCs have the same IP under the same node, the detection function fails.
+2. Currently, only `tcpSocket` and `httpGet` are supported.

@@ -7,6 +7,7 @@ For workloads that require fixed addresses, Kube-OVN provides multiple methods o
 - Workload IP Pool to specify fixed addresses.
 - StatefulSet fixed address.
 - KubeVirt VM fixed address.
+- Using Multus to fix addresses for secondary network interfaces.
 
 ## Single Pod Fixed IP/Mac
 
@@ -14,27 +15,17 @@ You can specify the IP/Mac required for the Pod by annotation when creating the 
 The `kube-ovn-controller` will skip the address random assignment phase and use the specified address directly after conflict detection, as follows:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Pod
 metadata:
-  name: ippool
-  labels:
-    app: ippool
+  name: static-ip
+  annotations:
+    ovn.kubernetes.io/ip_address: 10.16.0.15   // for dualstack use comma to separate addresses 10.16.0.15,fd00:10:16::000E
+    ovn.kubernetes.io/mac_address: 00:00:00:53:6B:B6
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: ippool
-  template:
-    metadata:
-      labels:
-        app: ippool
-      annotations:
-        ovn.kubernetes.io/ip_pool: 10.16.0.15,10.16.0.16,10.16.0.17 // for dualstack ippool use semicolon to separate addresses 10.16.0.15,fd00:10:16::000E;10.16.0.16,fd00:10:16::0
-    spec:
-      containers:
-        - name: ippool
-          image: docker.io/library/nginx:alpine
+  containers:
+  - name: static-ip
+    image: docker.io/library/nginx:alpine
 ```
 
 The following points need to be noted when using annotation.
@@ -133,4 +124,8 @@ If you need to update the IPs of StatefulSet Pods, first scale the StatefulSet r
 
 For VM instances created by KubeVirt, `kube-ovn-controller` can assign and manage IP addresses in a similar way to the StatefulSet Pod.
 This allows VM instances address fixed during start-up, shutdown, upgrade, migration, and other operations throughout their lifecycle,
-making them more compatible with the actual virtualization user experience.
+making them more compatible with the actual virtualization user experience. For specific operations, please refer to [Fixed Virtual Machine Addresses](../kubevirt/static-ip.en.md).
+
+## Using Multus to Fix Addresses for Secondary Network Interfaces
+
+When using Multus to configure multiple network interfaces for Pods, Kube-OVN type network interfaces can be configured with fixed addresses through specific annotations. For other CNIs that are not Kube-OVN, Kube-OVN can also provide IPAM capabilities separately to enable other CNIs to have fixed address capabilities as well. For specific operations, please refer to [Multi-NIC Management](../advance/multi-nic.en.md).

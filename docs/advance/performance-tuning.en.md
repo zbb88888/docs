@@ -7,7 +7,16 @@ The community will continue to iterate on the performance.
 Some general performance optimizations have been integrated into the latest version,
 so it is recommended to use the latest version to get better default performance.
 
-For more on the process and methodology of performance optimization, please watch the video [Kube-OVN 容器性能优化之旅](https://www.bilibili.com/video/BV1zS4y1T73m?share_source=copy_web).
+For more on the process and methodology of performance optimization, please watch the video [Kube-OVN 容器性能优化之旅](https://www.bilibili.com/video/BV1zS4y1T73m?share_source=copy_web){: target="_blank" }.
+
+## Common Misunderstandings about Network Performance
+
+Performance tuning and comparison is an exciting topic, and performance data comparisons under different configurations can be fascinating, but all of this may have minimal effect in real application scenarios. Below are some common misconceptions about network performance to help you better judge whether network tuning is needed.
+
+1. The latency introduced by CNI is about tens of nanoseconds per packet. If your application's request processing takes tens of milliseconds, even if CNI has no latency at all, the impact on application latency performance is minimal.
+2. Common network performance tests are packet sending tests. If one network plugin needs 10ns to process each packet while another needs 20ns, there will be a double performance difference, but for real applications with tens of milliseconds processing time, the difference is not significant.
+3. Contrary to first impressions, the bottleneck affecting network performance is usually the CPU. Better and more CPUs bring more significant performance improvements.
+4. If you need extreme network performance, it's best to use network solutions like Macvlan or SR-IOV that adopt ultra-lightweight or hardware virtualization technologies.
 
 ## Benchmarking
 
@@ -27,7 +36,7 @@ For more on the process and methodology of performance optimization, please watc
 - Network: 2*10Gbps, xmit_hash_policy=layer3+4
 
 We use `qperf -t 60 <server ip> -ub -oo msg_size:1 -vu tcp_lat tcp_bw udp_lat udp_bw`
-to test bandwidth and latency of tcp/udp in 1-byte packets and the host network, respectively.
+to test the bandwidth and latency of TCP/UDP with 1-byte packets.
 
 | Type               | tcp_lat (us) | udp_lat (us) | tcp_bw (Mb/s) | udp_bw(Mb/s) |
 | ------------------ | -------------| -------------| --------------| -------------|
@@ -119,7 +128,7 @@ ethtool -G eno1 tx 4096
 
 ### Optimize with tuned
 
-[tuned](https://tuned-project.org/) can use a series of preconfigured profile files to perform system optimizations for a specific scenario.
+[tuned](https://tuned-project.org/){: target="_blank" } can use a series of preconfigured profile files to perform system optimizations for a specific scenario.
 
 For latency-first scenarios:
 
@@ -155,6 +164,14 @@ args:
 > In Underlay mode `kube-proxy` cannot use iptables or ipvs to control container network traffic,
 > if you want to disable the LB function, you need to confirm whether you do not need the Service function.
 
+### Skip Conntrack Processing for Specific Target Addresses
+
+In some scenarios, you may need to use OVN LB for Service forwarding, but also have traffic to specific destinations that doesn't require Service or NetworkPolicy processing. For example, Pods in Subnet A directly accessing addresses in Subnet B. To accelerate this traffic, you can configure `kube-ovn-controller` to skip conntrack processing for these destinations using the `--skip-conntrack-dst-cidrs` parameter:
+
+```yaml
+    --skip-conntrack-dst-cidrs="10.17.0.0/16,169.254.169.245/32"
+```
+
 ### FastPath Kernel Module
 
 Since the container network and the host network are on different network ns, the packets will pass through the netfilter module several times when they are transmitted across the host, which results in a CPU overhead of nearly 20%.
@@ -163,9 +180,8 @@ The `FastPath` module can reduce CPU overhead by bypassing netfilter, since in m
 > If you need to use the functions provided by netfilter such as iptables, ipvs, nftables, etc. in the container network, this module will disable the related functions.
 
 Since kernel modules are kernel version dependent, it is not possible to provide a single kernel module artifact that adapts to all kernels.
-We pre-compiled the `FastPath` module for part of the kernels, which can be accessed by [tuning-package](https://github.com/kubeovn/tunning-package).
 
-You can also compile it manually, see [Compiling FastPath Module](./fastpath.md)
+You need to compile it manually, see [Compiling FastPath Module](./fastpath.md)
 
 After obtaining the kernel module, you can load the `FastPath` module on each node
 using `insmod kube_ovn_fastpath.ko` and verify that the module was loaded successfully using `dmesg`:
@@ -189,7 +205,7 @@ It has been tested that the CPU consumption of flow-related operations is reduce
 when the corresponding instruction set optimizations are enabled.
 
 Similar to the compilation of the `FastPath` module, it is not possible to provide a single kernel module artifact for all kernels.
-Users need to compile manually or go to [tuning-package](https://github.com/kubeovn/tunning-package) to see if a compiled package is available for download.
+Users need to compile it manually.
 
 Before using this kernel module, please check if the CPU supports the following instruction set:
 
@@ -209,7 +225,7 @@ yum install -y gcc kernel-devel-$(uname -r) python3 autoconf automake libtool rp
 Compile the OVS kernel module and generate the corresponding RPM:
 
 ```bash
-git clone -b branch-2.17 --depth=1 https://github.com/openvswitch/ovs.git
+git clone -b branch-3.5 --depth=1 https://github.com/openvswitch/ovs.git
 cd ovs
 curl -s  https://github.com/kubeovn/ovs/commit/2d2c83c26d4217446918f39d5cd5838e9ac27b32.patch |  git apply
 ./boot.sh
@@ -221,7 +237,7 @@ cd rpm/rpmbuild/RPMS/x86_64/
 Copy the RPM to each node and install:
 
 ```bash
-rpm -i openvswitch-kmod-2.15.2-1.el7.x86_64.rpm
+rpm -i openvswitch-kmod-3.5.1-1.el7.x86_64.rpm
 ```
 
 If you have previously started Kube-OVN and the older version of the OVS module has been loaded into the kernel.
@@ -238,7 +254,7 @@ apt install -y autoconf automake libtool gcc build-essential libssl-dev
 Compile the OVS kernel module and install:
 
 ```bash
-git clone -b branch-2.17 --depth=1 https://github.com/openvswitch/ovs.git
+git clone -b branch-3.5 --depth=1 https://github.com/openvswitch/ovs.git
 cd ovs
 curl -s  https://github.com/kubeovn/ovs/commit/2d2c83c26d4217446918f39d5cd5838e9ac27b32.patch |  git apply
 ./boot.sh
@@ -261,6 +277,10 @@ If you have previously started Kube-OVN and the older version of the OVS module 
 It is recommended to reboot the machine to reload the new version of the kernel module.
 
 ### Using STT Type Tunnel
+
+!!! warning
+
+    Open vSwitch upstream removed support for STT tunnels in version 3.6 [commit](https://github.com/openvswitch/ovs/commit/19b89416203f3b3b212fb01c30c81ea1b77624eb){: target="_blank" }. This solution will no longer receive upstream support in the future.
 
 Common tunnel encapsulation protocols such as Geneve and Vxlan use the UDP protocol to encapsulate packets and are well supported in the kernel.
 However, when TCP packets are encapsulated using UDP, the optimization and offload features of modern operating systems and

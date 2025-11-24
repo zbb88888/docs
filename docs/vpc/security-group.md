@@ -1,8 +1,10 @@
 # SecurityGroup 使用
 
-Kube-OVN 支持了安全组的配置，配置安全组使用的 CRD 为 SecurityGroup。
+Kube-OVN 支持安全组来控制一组 Pod 的网络访问规则。
 
-Kube-OVN 还支持 端口安全，通过仅允许与 IPAM 分配的 L2/L3 源地址匹配的地址，来防止 MAC 和 IP 欺骗。
+!!! warning
+
+    Kube-OVN 同时支持 [NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)，[Network Policy API](https://network-policy-api.sigs.k8s.io/)，[Subnet ACL](../guide/subnet.md#acl) 和 Security Group 四种类型的访问控制，其底层都是通过 OVN ACL 来实现。其中 NetworkPolicy 和 NetworkPolicy API 在设计时考虑了规则分层，可以做到优先级不冲突，其他类型的访问控制方式混用都可能导致优先级冲突。我们推荐不要同时使用多种访问控制规则，以避免优先级冲突带来的规则混乱。
 
 ## 安全组示例
 
@@ -31,22 +33,18 @@ spec:
 
 安全组各字段的具体含义，可以参考 [Kube-OVN 接口规范](../reference/kube-ovn-api.md)。
 
-Pod 通过添加 annotation 来绑定安全组，使用的 annotation 有两个：
-
-- `port_security`: 源地址验证。如果启用此功能，则只有由 Kube-OVN 的 IPAM 分配的 L2/L3 地址的报文可以从 Pod 网络适配器导出。禁用此功能后，任何 L2/L3 地址都可以从 Pod 发出。
-- `security_groups`： 安全组列表，包含一系列 ACL 规则。
-
-> 这两个 annotation 负责的功能是互相独立的。
+Pod 通过添加 `ovn.kubernetes.io/security_groups` annotation 来绑定安全组：
 
 ```yaml
-    ovn.kubernetes.io/port_security: "true"
     ovn.kubernetes.io/security_groups: sg-example
 ```
+
+关于端口安全（Port Security）功能的说明，请参考[端口安全文档](../guide/port-security.md)。
 
 ## 注意事项
 
 - 安全组最后是通过设置 ACL 规则来限制访问的，OVN 文档中提到，如果匹配到的两个 ACL 规则拥有相同的优先级，实际起作用的是哪个 ACL 是不确定的。因此设置安全组规则的时候，需要注意区分优先级。
-- 配置安全组时 priority 的取值范围为 1-200，值越小，安全组的优先级越高。通过 ACL 实现安全组时，会将安全组的优先级映射成 ACL 的优先级，具体映射关系如下：ACL 优先级 = 2300 - 安全组优先级，因此需要注意区分安全组和子网 ACL 优先级。
+- 配置安全组时 `priority` 的取值范围为 1-200，值越小，安全组的优先级越高。通过 ACL 实现安全组时，会将安全组的优先级映射成 ACL 的优先级，具体映射关系如下：ACL 优先级 = 2300 - 安全组优先级，因此需要注意区分安全组和子网 ACL 优先级。
 - 当添加安全组的时候，要清楚的知道是在添加什么限制。Kube-OVN 作为 CNI，创建 Pod 后会进行 Pod 到网关的连通性测试，如果访问不通网关，就会导致 Pod 一直处于 ContainerCreating 状态，无法顺利切换到 Running 状态。
 
 ## 实际测试
@@ -60,7 +58,6 @@ metadata:
   labels:
     app: static
   annotations:
-    ovn.kubernetes.io/port_security: 'true'
     ovn.kubernetes.io/security_groups: 'sg-example'
   name: sg-test-pod
   namespace: default
@@ -163,7 +160,6 @@ metadata:
   labels:
     app: static
   annotations:
-    ovn.kubernetes.io/port_security: 'true'
     ovn.kubernetes.io/security_groups: 'sg-gw-both'
   name: sg-gw-both
   namespace: default
